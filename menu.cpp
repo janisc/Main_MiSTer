@@ -665,7 +665,7 @@ static uint32_t menu_key_get(void)
 				{
 					c = KEY_ESC | UPSTROKE;
 				}
-				else if (get_map_vid() || get_map_pid())
+				else
 				{
 					send_map_cmd(KEY_ALTERASE);
 				}
@@ -4361,6 +4361,10 @@ void HandleUI(void)
 					OsdWrite(5, s);
 					if (!is_menu()) OsdWrite(10, "          F12 \x16 Clear all");
 				}
+			}
+			else if (!is_menu())
+			{
+				OsdWrite(7, "  Space/User/Menu \x16 Skip");
 			}
 
 			if (!is_menu() && (get_map_button() >= (joy_bcount ? joy_bcount + 4 : 8) || (select & get_map_vid() & get_map_pid())) && joymap_first && get_map_type())

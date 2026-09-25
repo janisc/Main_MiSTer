@@ -2940,6 +2940,26 @@ static void assign_player(int dev, int num, int force = 0)
 	printf("Device %s %sassigned to player %d\n", input[dev].id, force ? "forcebly " : "", input[dev].num);
 }
 
+// check if the code is used by the core button map or the advanced map of the device
+static int is_code_mapped(int dev, uint16_t code)
+{
+	for (uint i = 0; i < BTN_NUM; i++)
+	{
+		if (code == (input[dev].map[i] & 0xFFFF) || code == (input[dev].map[i] >> 16)) return 1;
+	}
+
+	for (int i = 0; i < ADVANCED_MAP_MAX && input[dev].advanced_map[i].input_codes[0]; i++)
+	{
+		advancedButtonMap *abm = &input[dev].advanced_map[i];
+		for (uint n = 0; n < sizeof(abm->input_codes) / sizeof(abm->input_codes[0]); n++)
+		{
+			if (code == abm->input_codes[n]) return 1;
+		}
+	}
+
+	return 0;
+}
+
 static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int dev, bool menu_event)
 {
 	if (ev->type != EV_KEY && ev->type != EV_ABS && ev->type != EV_REL) return;
@@ -2955,21 +2975,6 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 	if (ev->type == EV_KEY)
 	{
 		if (input[dev].timeout > 0) input[dev].timeout = cfg.bt_auto_disconnect * 10;
-
-		//mouse
-		//if the lightgun mouse quirk is set then don't pass these button presses to the mouse system
-		//let them get handled and mapped like regular buttons
-		if (ev->code >= BTN_MOUSE && ev->code < BTN_JOYSTICK && input[dev].quirk != QUIRK_LIGHTGUN_MOUSE)
-		{
-			if (ev->value <= 1)
-			{
-				int mask = 1 << (ev->code - BTN_MOUSE);
-				if (input[dev].ds_mouse_emu && mask == 1) mask = 2;
-				mice_btn = (ev->value) ? (mice_btn | mask) : (mice_btn & ~mask);
-				mouse_btn_req();
-			}
-			return;
-		}
 	}
 
 	if (ev->type == EV_KEY && ev->code < 256 && !(mapping && mapping_type == 2) && !input[dev].force_joy)
@@ -2988,7 +2993,7 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 
 	static int key_mapped = 0;
 
-	int map_skip = (ev->type == EV_KEY && mapping && ((ev->code == KEY_SPACE && mapping_type == 1) || ev->code == KEY_ALTERASE) && (mapping_dev >= 0 || mapping_button<0));
+	int map_skip = (ev->type == EV_KEY && mapping && ((ev->code == KEY_SPACE && mapping_type == 1) || ev->code == KEY_ALTERASE) && (mapping_dev >= 0 || mapping_button<0 || (mapping_type == 1 && !is_menu())));
 	int cancel   = (ev->type == EV_KEY && ev->code == KEY_ESC && !(mapping && mapping_type == 3 && mapping_button));
 	int enter    = (ev->type == EV_KEY && ev->code == KEY_ENTER && !(mapping && mapping_type == 3 && mapping_button));
 	int origcode = ev->code;
@@ -3089,6 +3094,23 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 		input[dev].has_advanced_map = true;
 	}
 
+	//mouse
+	//buttons go to the mouse unless they are being mapped or are mapped to the core.
+	//if the lightgun mouse quirk is set then don't pass these button presses to the mouse system
+	//let them get handled and mapped like regular buttons
+	if (ev->type == EV_KEY && ev->code >= BTN_MOUSE && ev->code < BTN_JOYSTICK && input[dev].quirk != QUIRK_LIGHTGUN_MOUSE &&
+		!(mapping && !is_menu()) && !is_code_mapped(dev, ev->code))
+	{
+		if (ev->value <= 1)
+		{
+			int mask = 1 << (ev->code - BTN_MOUSE);
+			if (input[dev].ds_mouse_emu && mask == 1) mask = 2;
+			mice_btn = (ev->value) ? (mice_btn | mask) : (mice_btn & ~mask);
+			mouse_btn_req();
+		}
+		return;
+	}
+
 	if (!input[dev].num)
 	{
 		bool assign_btn = ((input[dev].quirk == QUIRK_PDSP || input[dev].quirk == QUIRK_MSSP) && (ev->type == EV_REL || ev->type == EV_KEY));
@@ -3101,6 +3123,9 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 			{
 				if (ev->code == input[dev].mmap[i]) assign_btn = 1;
 			}
+
+			//other buttons mapped to the core (e.g. mouse buttons) claim a player too
+			if (!assign_btn && !is_menu()) assign_btn = is_code_mapped(dev, ev->code);
 		}
 
 		if (assign_btn)
@@ -3347,7 +3372,7 @@ static void input_cb(struct input_event *ev, struct input_absinfo *absinfo, int 
 			else
 			{
 				int clear = (ev->code == KEY_F12 || ev->code == KEY_MENU || ev->code == KEY_HOMEPAGE) && !is_menu();
-				if (ev->value == 1 && mapping_dev < 0 && !clear)
+				if (ev->value == 1 && mapping_dev < 0 && !clear && !map_skip)
 				{
 					mapping_dev = dev;
 					mapping_type = (ev->code >= 256 || input[dev].force_joy) ? 1 : 0;
@@ -4046,6 +4071,12 @@ void send_map_cmd(int key)
 		ev.code = key;
 		ev.value = 1;
 		input_cb(&ev, 0, mapping_dev);
+	}
+	else if (mapping && key == KEY_ALTERASE && mapping_type == 1 && !is_menu() && mapping_button < mapping_count)
+	{
+		// no device chosen yet: just skip to the next button
+		mapping_button++;
+		while (mapping_button >= 4 && mapping_button < mapping_count && !strcmp(joy_bnames[mapping_button - 4], "-")) mapping_button++;
 	}
 }
 
